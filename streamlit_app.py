@@ -1,9 +1,11 @@
 from phi.agent import Agent
 from phi.model.google import Gemini
-from phi.tools.duckduckgo import DuckDuckGo
 import streamlit as st
 from PIL import Image
 from typing import List, Optional
+from streamlit_paste_button import paste_image_button as pbutton
+import uuid
+import io
 
 
 def initialize_agents(api_key: str) -> tuple[Agent, Agent, Agent]:
@@ -36,21 +38,7 @@ def initialize_agents(api_key: str) -> tuple[Agent, Agent, Agent]:
             markdown=True
         )
 
-        market_agent = Agent(
-            model=model,
-            tools=[DuckDuckGo(search=True)],
-            instructions=[
-                "You are a market research expert that:",
-                "1. Identifies market trends and competitor patterns",
-                "2. Analyzes similar products and features",
-                "3. Suggests market positioning and opportunities",
-                "4. Provides industry-specific insights",
-                "Focus on actionable market intelligence"
-            ],
-            markdown=True
-        )
-
-        return vision_agent, ux_agent, market_agent
+        return vision_agent, ux_agent
     except Exception as e:
         st.error(f"Error initializing agents: {str(e)}")
         return None, None, None
@@ -83,56 +71,41 @@ with st.sidebar:
         1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
         """)
 
-st.title("Multimodal AI Design Agent Team")
+st.header("Multimodal AI Design Agent Team")
+
 
 if st.session_state.api_key_input:
-    vision_agent, ux_agent, market_agent = initialize_agents(
+    vision_agent, ux_agent = initialize_agents(
         st.session_state.api_key_input)
 
-    if all([vision_agent, ux_agent, market_agent]):
+    if all([vision_agent, ux_agent]):
         # File Upload Section
-        st.header("📤 Upload Content")
-        col1, space, col2 = st.columns([1, 0.1, 1])
+        st.subheader("📤 Upload Design")
 
-        with col1:
-            design_files = st.file_uploader(
-                "Upload UI/UX Designs",
-                type=["jpg", "jpeg", "png"],
-                accept_multiple_files=True,
-                key="designs"
-            )
+        design_files = []
 
-            if design_files:
-                for file in design_files:
-                    image = Image.open(file)
-                    st.image(image, caption=file.name)
-
-        with col2:
-            competitor_files = st.file_uploader(
-                "Upload Competitor Designs (Optional)",
-                type=["jpg", "jpeg", "png"],
-                accept_multiple_files=True,
-                key="competitors"
-            )
-
-            if competitor_files:
-                for file in competitor_files:
-                    image = Image.open(file)
-                    st.image(image, caption=f"Competitor: {file.name}")
+        paste_image = pbutton("📋 Paste an Image",
+                              text_color="#ffffff",
+                              background_color="#007BFF",
+                              hover_background_color="#016FE6")
+        if paste_image.image_data is not None:
+            st.image(paste_image.image_data)
+            design_files.append(paste_image)
 
         # Analysis Configuration
-        st.header("🎯 Analysis Configuration")
+        st.subheader("🎯 Configuration")
 
         analysis_types = st.multiselect(
             "Select Analysis Types",
-            ["Visual Design", "User Experience", "Market Analysis"],
-            default=["Visual Design"]
+            ["Visual Design", "User Experience"],
+            default=["User Experience"]
         )
 
         specific_elements = st.multiselect(
             "Focus Areas",
             ["Color Scheme", "Typography", "Layout", "Navigation",
-             "Interactions", "Accessibility", "Branding", "Market Fit"]
+             "Interactions", "Accessibility"],
+            default=["Interactions"]
         )
 
         context = st.text_area(
@@ -142,10 +115,9 @@ if st.session_state.api_key_input:
 
         # Analysis Process
         if st.button("🚀 Run Analysis", type="primary"):
+            print(len(design_files))
             if design_files:
                 try:
-                    st.header("📊 Analysis Results")
-
                     # Process images once
                     def process_images(files):
                         processed_images = []
@@ -156,12 +128,14 @@ if st.session_state.api_key_input:
                                 import os
 
                                 temp_dir = tempfile.gettempdir()
-                                temp_path = os.path.join(
-                                    temp_dir, f"temp_{file.name}")
 
-                                # Save the uploaded file to temp location
+                                temp_path = os.path.join(
+                                    temp_dir, f"{uuid.uuid4().hex}.png")
+
+                                img_bytes = io.BytesIO()
+                                file.image_data.save(img_bytes, format="PNG")
                                 with open(temp_path, "wb") as f:
-                                    f.write(file.getvalue())
+                                    f.write(img_bytes.getvalue())
 
                                 # Add the path to processed images
                                 processed_images.append(temp_path)
@@ -172,27 +146,24 @@ if st.session_state.api_key_input:
                                 continue
                         return processed_images
 
-                    design_images = process_images(design_files)
-                    competitor_images = process_images(
-                        competitor_files) if competitor_files else []
-                    all_images = design_images + competitor_images
+                    image_urls = process_images(design_files)
 
                     # Visual Design Analysis
                     if "Visual Design" in analysis_types and design_files:
                         with st.spinner("🎨 Analyzing visual design..."):
-                            if all_images:
+                            if image_urls:
                                 vision_prompt = f"""
                                 Analyze these designs focusing on: {', '.join(specific_elements)}
                                 Additional context: {context}
                                 Provide specific insights about visual design elements.
-                                
+
                                 Please format your response with clear headers and bullet points.
                                 Focus on concrete observations and actionable insights.
                                 """
 
                                 response = vision_agent.run(
                                     message=vision_prompt,
-                                    images=all_images
+                                    images=image_urls
                                 )
 
                                 st.subheader("🎨 Visual Design Analysis")
@@ -201,44 +172,23 @@ if st.session_state.api_key_input:
                     # UX Analysis
                     if "User Experience" in analysis_types:
                         with st.spinner("🔄 Analyzing user experience..."):
-                            if all_images:
+                            if image_urls:
                                 ux_prompt = f"""
                                 Evaluate the user experience considering: {', '.join(specific_elements)}
                                 Additional context: {context}
                                 Focus on user flows, interactions, and accessibility.
-                                
+
                                 Please format your response with clear headers and bullet points.
                                 Focus on concrete observations and actionable improvements.
                                 """
 
                                 response = ux_agent.run(
                                     message=ux_prompt,
-                                    images=all_images
+                                    images=image_urls
                                 )
 
                                 st.subheader("🔄 UX Analysis")
                                 st.markdown(response.content)
-
-                    # Market Analysis
-                    if "Market Analysis" in analysis_types:
-                        with st.spinner("📊 Conducting market analysis..."):
-                            market_prompt = f"""
-                            Analyze market positioning and trends based on these designs.
-                            Context: {context}
-                            Compare with competitor designs if provided.
-                            Suggest market opportunities and positioning.
-                            
-                            Please format your response with clear headers and bullet points.
-                            Focus on concrete market insights and actionable recommendations.
-                            """
-
-                            response = market_agent.run(
-                                message=market_prompt,
-                                images=all_images
-                            )
-
-                            st.subheader("📊 Market Analysis")
-                            st.markdown(response.content)
 
                     # Combined Insights
                     if len(analysis_types) > 1:
@@ -247,7 +197,6 @@ if st.session_state.api_key_input:
                         Above you'll find detailed analysis from multiple specialized AI agents, each focusing on their area of expertise:
                         - Visual Design Agent: Analyzes design elements and patterns
                         - UX Agent: Evaluates user experience and interactions
-                        - Market Research Agent: Provides market context and opportunities
                         """)
 
                 except Exception as e:
@@ -267,8 +216,6 @@ st.markdown("""
     <h4>Tips for Best Results</h4>
     <p>
     • Upload clear, high-resolution images<br>
-    • Include multiple views/screens for better context<br>
-    • Add competitor designs for comparative analysis<br>
     • Provide specific context about your target audience
     </p>
 </div>
